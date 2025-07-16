@@ -85,6 +85,10 @@ brew install --cask visual-studio-code
 ```
 brew install volta
 ```
+if you can't use Homebrew, you can install Volta manually by running:
+```
+curl https://get.volta.sh | bash
+```
 
 ### 8) Add Volta to your shell’s PATH
 ####    If you use zsh (default on recent macOS):
