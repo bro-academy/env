@@ -9,7 +9,7 @@ if (-not $winPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adminis
     $elevateArgs = @(
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
-        '-NoExit',                     # keep window open to show output/errors
+        '-NoExit',                     # keep window open for visibility
         '-File', "`"$scriptPath`""
     )
     if ($Force) { $elevateArgs += '-Force' }
@@ -18,38 +18,43 @@ if (-not $winPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adminis
 }
 
 try {
-    # 0) Ensure per-user ExecutionPolicy allows running this script
+    # 0) Ensure per-user policy allows script
     if ((Get-ExecutionPolicy -Scope CurrentUser) -ne 'RemoteSigned') {
         Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
     }
 
-    # 1) Emoji toggle based on UI culture (omit on Cyrillic locales)
-    $culture      = [System.Globalization.CultureInfo]::CurrentUICulture.Name
-    $disableEmoji = $culture -match '^(ru|uk|bg|sr|mk|be|kk|ky|uz(-Cyrl)?)(\-|$)'
+    # 1) Emoji toggle (disable on Cyrillic UI)
+    $culture      = [Globalization.CultureInfo]::CurrentUICulture.Name
+    $disableEmoji = $culture -match '^(ru|uk|bg|sr|mk|be|kk|ky|uz(-Cyrl)?)(-|$)'
     $EWarn        = if ($disableEmoji) { '' } else { '⚠️ ' }
     $EDone        = if ($disableEmoji) { '' } else { '✅ ' }
 
-    # 2) Winget source and package agreement flags
+    # 2) Define winget source & package args as arrays for splatting
     $DefaultSource = 'winget'
-    $SourceArgs    = "--source $DefaultSource --accept-source-agreements"
-    $PackageArgs   = "--accept-package-agreements"
+    $SourceArgs    = @(
+        '--source', $DefaultSource,
+        '--accept-source-agreements'
+    )
+    $PackageArgs   = @(
+        '--accept-package-agreements'
+    )
 
     # 3) Ensure UTF-8 code page
     chcp 65001 | Out-Null
 
-    # 4) Ensure winget.exe is on the PATH (Windows 10)
+    # 4) Add winget to PATH on Win10 if missing
     try {
         Get-Command winget -ErrorAction Stop | Out-Null
     } catch {
         $wingetPath = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
         if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $wingetPath })) {
-            Write-Host "Adding winget path to PATH..."
+            Write-Host "Adding winget path to user PATH..."
             [Environment]::SetEnvironmentVariable(
                 'Path',
                 "$env:Path;$wingetPath",
                 [EnvironmentVariableTarget]::User
             )
-            Write-Host "Path updated. Relaunching script..."
+            Write-Host "PATH updated; relaunching script..."
             Start-Process 'pwsh.exe' -ArgumentList @(
                 '-NoProfile','-ExecutionPolicy','Bypass','-NoExit',
                 '-File', "`"$MyInvocation.MyCommand.Definition`""
@@ -58,21 +63,21 @@ try {
         }
     }
 
-    # 5) Start logging
+    # 5) Begin logging
     $LogFile = Join-Path $PSScriptRoot 'install-dev-env.log'
     Start-Transcript -Path $LogFile -Append
 
-    # 6) Progress tracking setup
+    # 6) Progress bar setup
     $global:Step       = 0
     $global:TotalSteps = 6
     function Show-Progress {
         param([string]$Activity)
         $global:Step++
-        $rawPercent = ($Step / $TotalSteps) * 100
-        $percent    = [int]([math]::Max(0, [math]::Min($rawPercent, 100)))
+        $p = [int](( $Step / $TotalSteps ) * 100)
+        $p = [math]::Max(0, [math]::Min($p,100))
         Write-Progress -Activity "Installing Developer Tools" `
                        -Status "$Activity ($Step of $TotalSteps)" `
-                       -PercentComplete $percent
+                       -PercentComplete $p
         Write-Host "`n[$Step/$TotalSteps] $Activity"
     }
 
@@ -80,45 +85,41 @@ try {
     function Initialize-Winget {
         Write-Host "Authorizing only the '$DefaultSource' source..."
         try {
-            winget source update --name $DefaultSource $SourceArgs *> $null
-            winget list --source $DefaultSource $SourceArgs *> $null
+            winget source update @SourceArgs *> $null
+            winget list          @SourceArgs *> $null
         } catch {
             Write-Warning "${EWarn}Unable to initialize winget source '$DefaultSource'."
-            Write-Warning "Please run: winget source update --name $DefaultSource $SourceArgs"
+            Write-Warning "Run:  winget source update @SourceArgs"
             pause; exit 1
         }
     }
 
-    # 8) Yes/No prompt helper
-    function Read-YesNo {
-        param([string]$Prompt)
-        return (Read-Host $Prompt) -match '^[Yy]'
-    }
+    # 8) Simple Y/N prompt
+    function Read-YesNo { param($Prompt) ; (Read-Host $Prompt) -match '^[Yy]' }
 
-    # 9) Install or upgrade packages via winget (using only the 'winget' source)
+    # 9) Install or upgrade via winget (using array splatting)
     function Ensure-Installed {
-        param (
-            [string]$Id,
-            [string]$Name
-        )
-        $found = winget list --id $Id --source $DefaultSource $SourceArgs 2>&1 |
+        param($Id, $Name)
+
+        $found = winget list --id $Id @SourceArgs 2>&1 |
                  Select-String "^$Id"
+
         if ($found) {
             if ($Force) {
                 Write-Host "$Name already installed; upgrading..."
-                winget upgrade --id $Id --source $DefaultSource -e --silent $SourceArgs $PackageArgs
+                winget upgrade --id $Id -e --silent @SourceArgs @PackageArgs
             } elseif (Read-YesNo "$Name is already installed. Update it? [Y/N]") {
-                winget upgrade --id $Id --source $DefaultSource -e --silent $SourceArgs $PackageArgs
+                winget upgrade --id $Id -e --silent @SourceArgs @PackageArgs
             } else {
                 Write-Host "Skipped $Name"
             }
         } else {
             Write-Host "Installing $Name..."
-            winget install --id $Id --source $DefaultSource -e --silent $SourceArgs $PackageArgs
+            winget install --id $Id -e --silent @SourceArgs @PackageArgs
         }
     }
 
-    # 10) Main installation workflow
+    # 10) Main workflow
     Write-Host "`nStarting installation (Force = $Force)`n"
 
     Show-Progress "Initializing winget"
@@ -142,17 +143,17 @@ try {
     Show-Progress "Installing Volta"
     Ensure-Installed -Id "Volta.Volta"               -Name "Volta"
 
-    # 11) Finish up
+    # 11) Completion
     Write-Progress -Activity "Installing Developer Tools" -Completed
-    Write-Host "`n${EDone}Installation complete. You can now restart Windows Terminal or run Volta-based commands."
+    Write-Host "`n${EDone}Installation complete. You may restart your terminal now."
 
     Stop-Transcript
     Write-Host "Press any key to exit…"
-    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 }
 catch {
     Write-Host "❌ ERROR: $($_.Exception.Message)"
     Write-Host "Press any key to exit…"
-    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
