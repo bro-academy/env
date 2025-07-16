@@ -23,3 +23,13 @@
 5. **Finish**  
    - When you see **“Installation complete”**, press any key to close the window.  
    - Your developer tools are now installed and ready to use!  
+
+# To run manually
+```
+winget install --id Microsoft.PowerShell -e
+winget install --id Microsoft.WindowsTerminal -e
+winget install --id Git.Git -e
+winget install --id GitHub.cli -e
+winget install --id Microsoft.VisualStudioCode -e
+winget install --id Volta.Volta -e
+```
